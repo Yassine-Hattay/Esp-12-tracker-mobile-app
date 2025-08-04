@@ -64,6 +64,7 @@ dependencies {
     implementation("org.mapsforge:mapsforge-map:0.21.0")
     implementation("org.mapsforge:mapsforge-themes:0.21.0")
     implementation("androidx.activity:activity-compose:1.7.2") // keep latest stable version
+    implementation ("androidx.compose.material:material-icons-extended")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

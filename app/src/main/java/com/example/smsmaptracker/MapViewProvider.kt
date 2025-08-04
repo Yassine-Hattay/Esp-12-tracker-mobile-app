@@ -1,5 +1,3 @@
-//MapViewProvider.kt
-
 package com.example.smsmaptracker
 
 import android.content.Context
@@ -23,17 +21,25 @@ class MapViewProvider(
     private val context: Context,
     private val mapFile: File,
     private val renderThemeFile: File,
-    private val mapCenter: LatLong,
     private val previousZoomLevel: MutableState<Byte?>,
     private val markerManager: MarkerManager
 ) {
 
+    private var _mapCenter: LatLong? = null
+
+    var mapCenter: LatLong?
+        get() = _mapCenter
+        set(value) {
+            _mapCenter = value
+        }
+
     fun createMapView(
+        initialCenter: LatLong,
         onMapReady: (MapView) -> Unit
     ): MapView {
         val mapView = MapView(context)
 
-        mapView.setCenter(mapCenter)
+        mapView.setCenter(initialCenter)
         mapView.setZoomLevel(16.toByte())
 
         val tileCache: TileCache = AndroidUtil.createTileCache(
@@ -108,10 +114,14 @@ class MapViewProvider(
                     } else {
                         Log.d("MapsforgeMap", "Zoomed out: $previous → $currentZoom")
                     }
-                    markerManager.updateMarkerForZoom(mapView, currentZoom, mapCenter)
+                    mapCenter?.let { center ->
+                        markerManager.updateMarkerForZoom(mapView, currentZoom, center)
+                    }
                 } else if (previous == null) {
                     Log.d("MapsforgeMap", "Initial zoom level: $currentZoom")
-                    markerManager.updateMarkerForZoom(mapView, currentZoom, mapCenter)
+                    mapCenter?.let { center ->
+                        markerManager.updateMarkerForZoom(mapView, currentZoom, center)
+                    }
                 }
                 previousZoomLevel.value = currentZoom
             }

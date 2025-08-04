@@ -13,28 +13,89 @@ import androidx.compose.ui.viewinterop.AndroidView
 import org.mapsforge.core.model.LatLong
 import org.mapsforge.map.android.view.MapView
 import java.io.File
+import java.util.Calendar
+
+// Helper function to convert date/time parts to epoch millis
+fun toEpochMillis(
+    year: Int,
+    month: Int,
+    day: Int,
+    hour: Int = 0,
+    minute: Int = 0
+): Long {
+    val cal = Calendar.getInstance().apply {
+        set(Calendar.YEAR, year)
+        set(Calendar.MONTH, month - 1) // Calendar months are zero-based
+        set(Calendar.DAY_OF_MONTH, day)
+        set(Calendar.HOUR_OF_DAY, hour)
+        set(Calendar.MINUTE, minute)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    return cal.timeInMillis
+}
+
+// Data class holding coordinate + date millis for SMS location
+data class SmsCoordinate(
+    val latLong: LatLong,
+    val dateMillis: Long
+)
 
 @Composable
-fun MapsforgeMap() {
+fun MapsforgeMap(
+    startYear: Int? = null,
+    startMonth: Int? = null,
+    startDay: Int? = null,
+    startHour: Int = 0,
+    startMinute: Int = 0,
+
+    endYear: Int? = null,
+    endMonth: Int? = null,
+    endDay: Int? = null,
+    endHour: Int = 0,
+    endMinute: Int = 0,
+) {
     val TAG = "MapsforgeMap"
     val context = LocalContext.current
+
+    val startDateEpochMillis = if (startYear != null && startMonth != null && startDay != null) {
+        toEpochMillis(startYear, startMonth, startDay, startHour, startMinute)
+    } else null
+
+    val endDateEpochMillis = if (endYear != null && endMonth != null && endDay != null) {
+        toEpochMillis(endYear, endMonth, endDay, endHour, endMinute)
+    } else null
 
     var mapCenter by remember { mutableStateOf(LatLong(36.7753026, 10.1120584)) }
     val previousZoomLevel = remember { mutableStateOf<Byte?>(null) }
     val mapViewRef = remember { mutableStateOf<MapView?>(null) }
 
-    // <-- This is where we will store the parsed coords
-    val smsCoordinates = remember { mutableStateListOf<LatLong>() }
+    val smsCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
 
-    // Read latest 3 SMS coordinates on first composition
-    LaunchedEffect(Unit) {
+    LaunchedEffect(startDateEpochMillis, endDateEpochMillis) {
         try {
-            Log.d(TAG, "Querying SMS inbox...")
+            Log.d(TAG, "Querying SMS inbox with date filter [$startDateEpochMillis .. $endDateEpochMillis]")
+
+            val selectionBuilder = StringBuilder("address LIKE ?")
+            val selectionArgs = mutableListOf("%+21655895524%")
+
+            if (startDateEpochMillis != null && endDateEpochMillis != null) {
+                selectionBuilder.append(" AND date BETWEEN ? AND ?")
+                selectionArgs.add(startDateEpochMillis.toString())
+                selectionArgs.add(endDateEpochMillis.toString())
+            } else if (startDateEpochMillis != null) {
+                selectionBuilder.append(" AND date >= ?")
+                selectionArgs.add(startDateEpochMillis.toString())
+            } else if (endDateEpochMillis != null) {
+                selectionBuilder.append(" AND date <= ?")
+                selectionArgs.add(endDateEpochMillis.toString())
+            }
+
             val cursor = context.contentResolver.query(
                 Telephony.Sms.Inbox.CONTENT_URI,
                 arrayOf("address", "body", "date"),
-                "address LIKE ?",
-                arrayOf("%+21655895524%"),
+                selectionBuilder.toString(),
+                selectionArgs.toTypedArray(),
                 "date DESC"
             )
 
@@ -43,11 +104,12 @@ fun MapsforgeMap() {
                 return@LaunchedEffect
             }
 
-            val coordinates = mutableListOf<LatLong>()
+            val coordinates = mutableListOf<SmsCoordinate>()
 
             cursor.use {
-                while (it.moveToNext() && coordinates.size < 3) {
+                while (it.moveToNext()) {
                     val body = it.getString(it.getColumnIndexOrThrow("body"))
+                    val dateMillis = it.getLong(it.getColumnIndexOrThrow("date"))
 
                     val regex = Regex("""(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)""")
                     val match = regex.find(body)
@@ -56,18 +118,18 @@ fun MapsforgeMap() {
                         val lat = match.groupValues[1].toDouble()
                         val lon = match.groupValues[2].toDouble()
                         val coord = LatLong(lat, lon)
-                        Log.d(TAG, "Parsed coordinates: $lat, $lon")
-                        coordinates.add(coord)
+                        Log.d(TAG, "Parsed coordinates: $lat, $lon with date $dateMillis")
+                        coordinates.add(SmsCoordinate(coord, dateMillis))
                     }
                 }
             }
 
             if (coordinates.isNotEmpty()) {
-                mapCenter = coordinates.first() // Use the latest as center
+                mapCenter = coordinates.first().latLong
                 smsCoordinates.clear()
                 smsCoordinates.addAll(coordinates)
             } else {
-                Log.w(TAG, "No valid coordinates found in last SMS messages.")
+                Log.w(TAG, "No valid coordinates found in SMS messages within the date filter.")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error reading SMS", e)
@@ -110,27 +172,35 @@ fun MapsforgeMap() {
             context = context,
             mapFile = mapFile,
             renderThemeFile = renderThemeFile,
-            mapCenter = mapCenter,
             previousZoomLevel = previousZoomLevel,
             markerManager = markerManager
-        )
+        ).apply {
+            this.mapCenter = mapCenter
+        }
     }
 
     AndroidView(
         factory = { ctx ->
-            mapViewProvider.createMapView { mapView ->
+            mapViewProvider.createMapView(mapCenter) { mapView ->
                 mapViewRef.value = mapView
-
-                // Update main dynamic marker to latest position
-                val center = smsCoordinates.firstOrNull() ?: mapCenter
-                markerManager.updateMarkerForZoom(mapView, 16, center)
-
-                // Add all static SMS markers
-                smsCoordinates.forEach { coord ->
-                    markerManager.addStaticMarker(mapView, coord)
-                }
             }
         },
         modifier = Modifier.fillMaxSize()
     )
+
+    LaunchedEffect(smsCoordinates) {
+        val mapView = mapViewRef.value ?: return@LaunchedEffect
+
+        Log.d(TAG, "Updating markers on the map")
+
+        smsCoordinates.forEachIndexed { index, smsCoord ->
+            Log.d(TAG, "Adding static marker #$index at ${smsCoord.latLong} with date ${smsCoord.dateMillis}")
+            markerManager.addMarkerWithDate(mapView, smsCoord.latLong, smsCoord.dateMillis)
+        }
+
+        val center = smsCoordinates.firstOrNull()?.latLong ?: mapCenter
+        markerManager.updateMarkerForZoom(mapView, 16, center)
+
+        mapView.repaint()
+    }
 }
