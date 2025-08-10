@@ -10,22 +10,45 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import org.mapsforge.core.graphics.Color
+import org.mapsforge.core.graphics.Paint
+import org.mapsforge.core.graphics.Style
 import org.mapsforge.core.model.LatLong
+import org.mapsforge.map.android.graphics.AndroidGraphicFactory
+import org.mapsforge.map.layer.overlay.Marker
+import org.mapsforge.map.layer.overlay.Polyline
 import org.mapsforge.map.android.view.MapView
 import java.io.File
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Locale
 
-// Helper function to convert date/time parts to epoch millis
+// Helper function to calculate distance between two LatLong points (approx meters)
+fun distanceBetween(p1: LatLong, p2: LatLong): Double {
+    val earthRadius = 6371000.0 // meters
+    val dLat = Math.toRadians(p2.latitude - p1.latitude)
+    val dLon = Math.toRadians(p2.longitude - p1.longitude)
+    val lat1 = Math.toRadians(p1.latitude)
+    val lat2 = Math.toRadians(p2.latitude)
+
+    val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2)
+    val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    return earthRadius * c
+}
+// Helper function as before
 fun toEpochMillis(
-    year: Int,
-    month: Int,
-    day: Int,
-    hour: Int = 0,
-    minute: Int = 0
+    year: Int, month: Int, day: Int,
+    hour: Int = 0, minute: Int = 0
 ): Long {
     val cal = Calendar.getInstance().apply {
         set(Calendar.YEAR, year)
-        set(Calendar.MONTH, month - 1) // Calendar months are zero-based
+        set(Calendar.MONTH, month - 1)
         set(Calendar.DAY_OF_MONTH, day)
         set(Calendar.HOUR_OF_DAY, hour)
         set(Calendar.MINUTE, minute)
@@ -35,11 +58,7 @@ fun toEpochMillis(
     return cal.timeInMillis
 }
 
-// Data class holding coordinate + date millis for SMS location
-data class SmsCoordinate(
-    val latLong: LatLong,
-    val dateMillis: Long
-)
+data class SmsCoordinate(val latLong: LatLong, val dateMillis: Long)
 
 @Composable
 fun MapsforgeMap(
@@ -69,6 +88,7 @@ fun MapsforgeMap(
     var mapCenter by remember { mutableStateOf(LatLong(36.7753026, 10.1120584)) }
     val previousZoomLevel = remember { mutableStateOf<Byte?>(null) }
     val mapViewRef = remember { mutableStateOf<MapView?>(null) }
+    val polylineRef = remember { mutableStateOf<Polyline?>(null) }
 
     val smsCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
 
@@ -77,7 +97,7 @@ fun MapsforgeMap(
             Log.d(TAG, "Querying SMS inbox with date filter [$startDateEpochMillis .. $endDateEpochMillis]")
 
             val selectionBuilder = StringBuilder("address LIKE ?")
-            val selectionArgs = mutableListOf("%+21655895524%")
+            val selectionArgs = mutableListOf("%+21655895524%") // Your filter phone number here
 
             if (startDateEpochMillis != null && endDateEpochMillis != null) {
                 selectionBuilder.append(" AND date BETWEEN ? AND ?")
@@ -188,19 +208,109 @@ fun MapsforgeMap(
         modifier = Modifier.fillMaxSize()
     )
 
+    // When smsCoordinates change, add markers and fetch + display route
     LaunchedEffect(smsCoordinates) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
 
-        Log.d(TAG, "Updating markers on the map")
+        // Clear old polyline if exists
+        polylineRef.value?.let {
+            mapView.layerManager.layers.remove(it)
+            polylineRef.value = null
+        }
 
+        // Add markers with date labels
         smsCoordinates.forEachIndexed { index, smsCoord ->
-            Log.d(TAG, "Adding static marker #$index at ${smsCoord.latLong} with date ${smsCoord.dateMillis}")
+            Log.d(TAG, "Adding marker #$index at ${smsCoord.latLong} with date ${smsCoord.dateMillis}")
             markerManager.addMarkerWithDate(mapView, smsCoord.latLong, smsCoord.dateMillis)
         }
 
+        // Update zoom marker on first coordinate or fallback
         val center = smsCoordinates.firstOrNull()?.latLong ?: mapCenter
         markerManager.updateMarkerForZoom(mapView, 16, center)
 
         mapView.repaint()
+
+        if (smsCoordinates.size >= 2) {
+            try {
+                val routePoints = withContext(Dispatchers.IO) {
+                    fetchGraphhopperRoute(smsCoordinates.map { it.latLong })
+                }
+
+                if (routePoints.isNotEmpty()) {
+
+                    val mapView = mapViewRef.value ?: return@LaunchedEffect
+
+                    // Remove old polyline if exists
+                    polylineRef.value?.let {
+                        mapView.layerManager.layers.remove(it)
+                        polylineRef.value = null
+                    }
+
+                    // Create paint for the full route polyline
+                    val linePaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
+                        color = android.graphics.Color.BLUE
+                        strokeWidth = 6f
+                        setStyle(org.mapsforge.core.graphics.Style.STROKE)
+                    }
+
+                    // Create a polyline and add all route points in order
+                    val routePolyline = Polyline(linePaint, AndroidGraphicFactory.INSTANCE)
+                    routePoints.forEach { latLong ->
+                        routePolyline.addPoint(latLong)
+                    }
+
+                    // Add the polyline to the map
+                    mapView.layerManager.layers.add(routePolyline)
+                    polylineRef.value = routePolyline
+
+                    mapView.post {
+                        mapView.repaint()
+                    }
+
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching or displaying route", e)
+            }
+        }
+
+    }
+}
+
+fun fetchGraphhopperRoute(points: List<LatLong>): List<LatLong> {
+    val client = OkHttpClient()
+    if (points.size < 2) return emptyList()
+
+    val url = buildString {
+        append("http://127.0.0.1:8989/route?")
+        points.forEach { p -> append("point=${p.latitude},${p.longitude}&") }
+        append("profile=car&locale=en&points_encoded=false")
+    }
+
+    return try {
+        val request = Request.Builder().url(url).build()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            Log.e("MapsforgeMap", "Route request failed with code: ${response.code}")
+            return emptyList()
+        }
+
+        val json = JSONObject(response.body!!.string())
+        val path = json.getJSONArray("paths").getJSONObject(0)
+        val coords = path.getJSONObject("points").getJSONArray("coordinates")
+
+        val routePoints = mutableListOf<LatLong>()
+        for (i in 0 until coords.length()) {
+            val coord = coords.getJSONArray(i)
+            val lon = coord.getDouble(0)
+            val lat = coord.getDouble(1)
+            routePoints.add(LatLong(lat, lon))
+        }
+
+        Log.d("MapsforgeMap", "Routing succeeded with ${routePoints.size} points.")
+
+        routePoints
+    } catch (e: Exception) {
+        Log.e("MapsforgeMap", "Failed to fetch route", e)
+        emptyList()
     }
 }
