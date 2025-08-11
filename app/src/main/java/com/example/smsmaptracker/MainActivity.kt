@@ -36,7 +36,7 @@
 
         override fun onCreate(savedInstanceState: Bundle?) {
             super.onCreate(savedInstanceState)
-    
+
             WindowCompat.setDecorFitsSystemWindows(window, false)
             AndroidGraphicFactory.createInstance(application)
 
@@ -80,19 +80,19 @@
             var startDay by remember { mutableStateOf(4) }
             var startHour by remember { mutableStateOf(13) }
             var startMinute by remember { mutableStateOf(0) }
-
+    
             var endYear by remember { mutableStateOf(2025) }
             var endMonth by remember { mutableStateOf(8) }
             var endDay by remember { mutableStateOf(4) }
             var endHour by remember { mutableStateOf(15) }
             var endMinute by remember { mutableStateOf(30) }
-
+    
             val context = LocalContext.current
             var showFilterDialog by remember { mutableStateOf(false) }
-
+    
             // New state to trigger route drawing
             var drawRouteTrigger by remember { mutableStateOf(false) }
-
+    
             fun showDatePicker(
                 initialYear: Int,
                 initialMonth: Int,
@@ -109,7 +109,7 @@
                     initialDay
                 ).show()
             }
-
+    
             fun showTimePicker(
                 initialHour: Int,
                 initialMinute: Int,
@@ -125,7 +125,7 @@
                     true
                 ).show()
             }
-
+    
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -143,7 +143,7 @@
                         }",
                         style = MaterialTheme.typography.bodyLarge
                     )
-
+    
                     Text(
                         "End: $endYear-${endMonth.toString().padStart(2, '0')}-${
                             endDay.toString().padStart(2, '0')
@@ -152,9 +152,9 @@
                         }",
                         style = MaterialTheme.typography.bodyLarge
                     )
-
+    
                     Spacer(modifier = Modifier.height(8.dp))
-
+    
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -180,7 +180,7 @@
                         }
                     }
                 }
-
+    
                 // Existing filter button
                 FloatingActionButton(
                     onClick = { showFilterDialog = true },
@@ -190,7 +190,7 @@
                 ) {
                     Icon(Icons.Filled.FilterList, contentDescription = "Open Filters")
                 }
-
+    
                 // New FloatingActionButton for route drawing (same style)
                 FloatingActionButton(
                     onClick = {
@@ -202,14 +202,14 @@
                 ) {
                     Icon(Icons.Filled.Navigation, contentDescription = "Update Routes")
                 }
-
+    
                 if (showFilterDialog) {
                     AlertDialog(
                         onDismissRequest = { showFilterDialog = false },
                         title = { Text("Select Start Date & Time") },
                         text = {
                             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-
+    
                                 Button(onClick = {
                                     val now = java.util.Calendar.getInstance()
                                     startYear = now.get(Calendar.YEAR)
@@ -217,7 +217,7 @@
                                     startDay = now.get(Calendar.DAY_OF_MONTH)
                                     startHour = 0
                                     startMinute = 0
-
+    
                                     endYear = startYear
                                     endMonth = startMonth
                                     endDay = startDay
@@ -226,9 +226,9 @@
                                 }) {
                                     Text("Use Today (00:00 to 23:59)")
                                 }
-
+    
                                 Spacer(Modifier.height(8.dp))
-
+    
                                 Text("Select Start Date & Time")
                                 Button(onClick = {
                                     showDatePicker(startYear, startMonth, startDay) { y, m, d ->
@@ -246,7 +246,7 @@
                                 }) {
                                     Text("Start Time: ${startHour.toString().padStart(2, '0')}:${startMinute.toString().padStart(2, '0')}")
                                 }
-
+    
                                 Spacer(Modifier.height(8.dp))
                                 Text("Select End Date & Time")
                                 Button(onClick = {

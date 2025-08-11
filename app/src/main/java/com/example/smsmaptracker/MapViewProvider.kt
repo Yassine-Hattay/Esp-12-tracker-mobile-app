@@ -114,14 +114,10 @@ class MapViewProvider(
                     } else {
                         Log.d("MapsforgeMap", "Zoomed out: $previous → $currentZoom")
                     }
-                    mapCenter?.let { center ->
-                        markerManager.updateMarkerForZoom(mapView, currentZoom, center)
-                    }
+
                 } else if (previous == null) {
                     Log.d("MapsforgeMap", "Initial zoom level: $currentZoom")
-                    mapCenter?.let { center ->
-                        markerManager.updateMarkerForZoom(mapView, currentZoom, center)
-                    }
+
                 }
                 previousZoomLevel.value = currentZoom
             }

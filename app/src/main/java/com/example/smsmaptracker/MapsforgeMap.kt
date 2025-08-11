@@ -1,10 +1,22 @@
 package com.example.smsmaptracker
 
-import android.provider.Telephony
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Looper
 import android.util.Log
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,34 +29,25 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import org.mapsforge.core.model.LatLong
 import org.mapsforge.map.android.graphics.AndroidGraphicFactory
+import org.mapsforge.core.graphics.Paint
+import org.mapsforge.core.graphics.Style
+import org.mapsforge.core.model.LatLong
 import org.mapsforge.map.android.view.MapView
 import org.mapsforge.map.layer.overlay.Polyline
+import org.mapsforge.map.layer.overlay.Polygon
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Place
+import androidx.core.content.ContextCompat
 
+// Data classes and utility functions...
 
-fun distanceBetween(p1: LatLong, p2: LatLong): Double {
-    val earthRadius = 6371000.0 // meters
-    val dLat = Math.toRadians(p2.latitude - p1.latitude)
-    val dLon = Math.toRadians(p2.longitude - p1.longitude)
-    val lat1 = Math.toRadians(p1.latitude)
-    val lat2 = Math.toRadians(p2.latitude)
+fun Double.format(digits: Int) = "%.${digits}f".format(this)
 
-    val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2)
-    val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-    return earthRadius * c
-}
+data class SmsCoordinate(val latLong: LatLong, val dateMillis: Long)
 
-fun toEpochMillis(
-    year: Int, month: Int, day: Int,
-    hour: Int = 0, minute: Int = 0
-): Long {
+fun toEpochMillis(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 0): Long {
     val cal = Calendar.getInstance().apply {
         set(Calendar.YEAR, year)
         set(Calendar.MONTH, month - 1)
@@ -57,8 +60,16 @@ fun toEpochMillis(
     return cal.timeInMillis
 }
 
-data class SmsCoordinate(val latLong: LatLong, val dateMillis: Long)
+fun createTriangleAround(center: LatLong, sizeMeters: Double = 20.0): List<LatLong> {
+    val latOffset = sizeMeters / 111000.0
+    val lonOffset = sizeMeters / (111000.0 * Math.cos(Math.toRadians(center.latitude)))
 
+    val p1 = LatLong(center.latitude + latOffset, center.longitude)
+    val p2 = LatLong(center.latitude - latOffset / 2, center.longitude - lonOffset)
+    val p3 = LatLong(center.latitude - latOffset / 2, center.longitude + lonOffset)
+    return listOf(p1, p2, p3, p1) // close polygon
+}
+@SuppressLint("MissingPermission") // permission checked manually
 @Composable
 fun MapsforgeMap(
     startYear: Int? = null,
@@ -73,10 +84,45 @@ fun MapsforgeMap(
     endHour: Int = 0,
     endMinute: Int = 0,
 
-    drawRouteTrigger: Boolean = false  // NEW parameter to trigger route drawing
+    drawRouteTrigger: Boolean = false,
 ) {
     val TAG = "MapsforgeMap"
     val context = LocalContext.current
+
+    // Current Location state
+    var currentLocation by remember { mutableStateOf<LatLong?>(null) }
+
+    // Location manager
+    val locationManager = remember {
+        context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    }
+
+    // Permission launcher for Location
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { granted ->
+            if (granted) {
+                startLocationUpdates(locationManager) { loc ->
+                    currentLocation = LatLong(loc.latitude, loc.longitude)
+                }
+            } else {
+                Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+            }
+        }
+    )
+
+    // On Compose startup: check permission and request if needed
+    LaunchedEffect(Unit) {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED) {
+            startLocationUpdates(locationManager) { loc ->
+                currentLocation = LatLong(loc.latitude, loc.longitude)
+            }
+        } else {
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
 
     val startDateEpochMillis = if (startYear != null && startMonth != null && startDay != null) {
         toEpochMillis(startYear, startMonth, startDay, startHour, startMinute)
@@ -87,21 +133,18 @@ fun MapsforgeMap(
     } else null
 
     var mapCenter by remember { mutableStateOf<LatLong?>(null) }
-
     val previousZoomLevel = remember { mutableStateOf<Byte?>(null) }
     val mapViewRef = remember { mutableStateOf<MapView?>(null) }
     val polylineRef = remember { mutableStateOf<Polyline?>(null) }
-
-    val smsCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
-
+    val currentLocationPolygonRef = remember { mutableStateOf<Polygon?>(null) }
     val lastUserCenter = remember { mutableStateOf<LatLong?>(null) }
     val lastUserZoom = remember { mutableStateOf<Byte?>(null) }
 
-    // Dialog visible state
+    val smsCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
     var showMarkerSelectDialog by remember { mutableStateOf(false) }
-    // Selected markers for routing
     val selectedCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
 
+    // Load SMS coordinates with date filter
     LaunchedEffect(startDateEpochMillis, endDateEpochMillis) {
         try {
             Log.d(TAG, "Querying SMS inbox with date filter [$startDateEpochMillis .. $endDateEpochMillis]")
@@ -122,7 +165,7 @@ fun MapsforgeMap(
             }
 
             val cursor = context.contentResolver.query(
-                Telephony.Sms.Inbox.CONTENT_URI,
+                android.provider.Telephony.Sms.Inbox.CONTENT_URI,
                 arrayOf("address", "body", "date"),
                 selectionBuilder.toString(),
                 selectionArgs.toTypedArray(),
@@ -134,44 +177,36 @@ fun MapsforgeMap(
                 return@LaunchedEffect
             }
 
-            val coordinates = mutableListOf<SmsCoordinate>()
-
+            val coords = mutableListOf<SmsCoordinate>()
             cursor.use {
                 while (it.moveToNext()) {
                     val body = it.getString(it.getColumnIndexOrThrow("body"))
                     val dateMillis = it.getLong(it.getColumnIndexOrThrow("date"))
-
                     val regex = Regex("""(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)""")
                     val match = regex.find(body)
-
                     if (match != null) {
                         val lat = match.groupValues[1].toDouble()
                         val lon = match.groupValues[2].toDouble()
-                        val coord = LatLong(lat, lon)
-                        Log.d(TAG, "Parsed coordinates: $lat, $lon with date $dateMillis")
-                        coordinates.add(SmsCoordinate(coord, dateMillis))
+                        coords.add(SmsCoordinate(LatLong(lat, lon), dateMillis))
                     }
                 }
             }
 
-            if (coordinates.isNotEmpty()) {
-                if (mapCenter == null) {
-                    mapCenter = coordinates.first().latLong
-                }
+            if (coords.isNotEmpty()) {
+                if (mapCenter == null) mapCenter = coords.first().latLong
                 smsCoordinates.clear()
-                smsCoordinates.addAll(coordinates)
-
-                // Initially select all coordinates
+                smsCoordinates.addAll(coords)
                 selectedCoordinates.clear()
-                selectedCoordinates.addAll(coordinates)
+                selectedCoordinates.addAll(coords)
             } else {
-                Log.w(TAG, "No valid coordinates found in SMS messages within the date filter.")
+                Log.w(TAG, "No valid coordinates found in SMS within date filter.")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error reading SMS", e)
         }
     }
 
+    // Load map and theme files from cache or assets
     val mapFile = remember {
         val file = File(context.cacheDir, "Tunisia_oam.osm.map")
         if (!file.exists()) {
@@ -193,11 +228,8 @@ fun MapsforgeMap(
     }
 
     if (!mapFile.exists() || !renderThemeFile.exists()) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("Required files not found in cache.")
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Required map files missing.")
         }
         return
     }
@@ -215,7 +247,7 @@ fun MapsforgeMap(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
                 mapViewProvider.createMapView(mapCenter ?: LatLong(36.7753026, 10.1120584)) { mapView ->
@@ -226,7 +258,6 @@ fun MapsforgeMap(
             modifier = Modifier.fillMaxSize()
         )
 
-        // FloatingActionButton at bottom center
         FloatingActionButton(
             onClick = { showMarkerSelectDialog = true },
             modifier = Modifier
@@ -237,17 +268,16 @@ fun MapsforgeMap(
         }
     }
 
-    // Update markers on map when smsCoordinates change
+    // Update SMS markers on map
     LaunchedEffect(smsCoordinates) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
         markerManager.clearAllMarkers(mapView)
-        smsCoordinates.forEachIndexed { index, smsCoord ->
-            Log.d(TAG, "Adding marker #$index at ${smsCoord.latLong} with date ${smsCoord.dateMillis}")
-            markerManager.addMarkerWithDate(mapView, smsCoord.latLong, smsCoord.dateMillis)
+        smsCoordinates.forEachIndexed { _, coord ->
+            markerManager.addMarkerWithDate(mapView, coord.latLong, coord.dateMillis)
         }
     }
 
-    // Draw or update route only when drawRouteTrigger toggled or selectedCoordinates change
+    // Draw route polyline
     LaunchedEffect(drawRouteTrigger, selectedCoordinates.toList()) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
         polylineRef.value?.let {
@@ -293,50 +323,91 @@ fun MapsforgeMap(
         }
     }
 
-    // Marker selection dialog
+    // Draw red triangle polygon for current GPS location
+    LaunchedEffect(currentLocation) {
+        val mapView = mapViewRef.value ?: return@LaunchedEffect
+        currentLocationPolygonRef.value?.let {
+            mapView.layerManager.layers.remove(it)
+            currentLocationPolygonRef.value = null
+        }
+
+        currentLocation?.let { loc ->
+            val fillPaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
+                color = android.graphics.Color.RED
+            }
+            val strokePaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
+                color = android.graphics.Color.RED
+                strokeWidth = 4f
+            }
+
+            val trianglePoints = createTriangleAround(loc, sizeMeters = 2.0)
+            val polygon = Polygon(fillPaint, strokePaint, AndroidGraphicFactory.INSTANCE)
+            trianglePoints.forEach { polygon.addPoint(it) }
+
+            mapView.layerManager.layers.add(polygon)
+            currentLocationPolygonRef.value = polygon
+            mapView.post { mapView.repaint() }
+        }
+    }
+
+    // Show marker selection dialog
     if (showMarkerSelectDialog) {
         AlertDialog(
             onDismissRequest = { showMarkerSelectDialog = false },
             title = { Text("Select Markers to Route") },
             text = {
-                if (smsCoordinates.isEmpty()) {
-                    Text("No markers available in the selected date range.")
-                } else {
-                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
-                        items(smsCoordinates) { coord ->
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                            ) {
-                                val checked = selectedCoordinates.contains(coord)
-                                Checkbox(
-                                    checked = checked,
-                                    onCheckedChange = {
-                                        if (it) selectedCoordinates.add(coord)
-                                        else selectedCoordinates.remove(coord)
-                                    }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "Lat: ${coord.latLong.latitude.format(4)}, Lon: ${coord.latLong.longitude.format(4)} - " +
-                                            "Date: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(coord.dateMillis))}"
-                                )
-                            }
+                // Replace this inside your AlertDialog text LazyColumn
+                LazyColumn {
+                    items(smsCoordinates) { coord ->
+                        val isSelected = selectedCoordinates.contains(coord)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { checked ->
+                                    if (checked) selectedCoordinates.add(coord)
+                                    else selectedCoordinates.remove(coord)
+                                }
+                            )
+                            Text(
+                                text = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(coord.dateMillis)),
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
                         }
                     }
                 }
+
             },
             confirmButton = {
                 Button(onClick = { showMarkerSelectDialog = false }) {
-                    Text("Done")
+                    Text("OK")
                 }
             }
         )
     }
 }
 
-// Helper extension function to format doubles nicely
-fun Double.format(digits: Int) = "%.${digits}f".format(this)
+// Helper function to start GPS location updates with callback
+@SuppressLint("MissingPermission")
+fun startLocationUpdates(locationManager: LocationManager, onLocationChanged: (Location) -> Unit) {
+    val listener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            onLocationChanged(location)
+        }
+
+        override fun onProviderDisabled(provider: String) {}
+        override fun onProviderEnabled(provider: String) {}
+    }
+    locationManager.requestLocationUpdates(
+        LocationManager.GPS_PROVIDER,
+        1000L,
+        0f,
+        listener,
+        Looper.getMainLooper()
+    )
+}
 
 fun fetchGraphhopperRoute(points: List<LatLong>): List<LatLong> {
     val client = OkHttpClient()
