@@ -16,6 +16,7 @@ import org.mapsforge.map.view.InputListener
 import java.io.File
 import java.io.InputStream
 import androidx.compose.runtime.MutableState
+import android.view.ViewGroup
 
 class MapViewProvider(
     private val context: Context,
@@ -38,6 +39,10 @@ class MapViewProvider(
         onMapReady: (MapView) -> Unit
     ): MapView {
         val mapView = MapView(context)
+        mapView.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
 
         mapView.setCenter(initialCenter)
         mapView.setZoomLevel(16.toByte())

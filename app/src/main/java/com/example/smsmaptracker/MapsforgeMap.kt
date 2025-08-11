@@ -40,6 +40,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.content.ContextCompat
+import androidx.compose.material.icons.filled.MyLocation
 
 // Data classes and utility functions...
 
@@ -275,15 +276,43 @@ fun MapsforgeMap(
             modifier = Modifier.fillMaxSize()
         )
 
+        // Marker selection FAB
         FloatingActionButton(
             onClick = { showMarkerSelectDialog = true },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 80.dp)
+                .padding(bottom = 50.dp)
         ) {
             Icon(Icons.Filled.Place, contentDescription = "Select Markers")
         }
+
+        var lastToastTime by remember { mutableStateOf(0L) }
+
+        FloatingActionButton(
+            onClick = {
+                val mapView = mapViewRef.value
+                val loc = currentLocation
+                if (mapView != null && loc != null) {
+                    mapView.setCenter(loc)
+                    mapView.setZoomLevel(18.toByte()) // zoom in close to location
+                    mapView.post { mapView.repaint() }
+                } else {
+                    val now = System.currentTimeMillis()
+                    if (now - lastToastTime > 2000) { // 2-second cooldown
+                        Toast.makeText(context, "No GPS location yet", Toast.LENGTH_SHORT).show()
+                        lastToastTime = now
+                    }
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(y = (-80).dp) // move upward
+                .padding(end = 0.dp)
+        ) {
+            Icon(Icons.Filled.MyLocation, contentDescription = "Zoom to My Location")
+        }
     }
+
 
     // Update SMS markers on map (excluding "My Location" since it's drawn separately)
     LaunchedEffect(smsCoordinates) {

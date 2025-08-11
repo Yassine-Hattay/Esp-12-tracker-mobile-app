@@ -38,6 +38,27 @@
             super.onCreate(savedInstanceState)
 
             WindowCompat.setDecorFitsSystemWindows(window, false)
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                // API 30+
+                window.insetsController?.let { controller ->
+                    controller.hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+                    controller.systemBarsBehavior =
+                        android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            } else {
+                // For API 21 to 29, use deprecated systemUiVisibility flags
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = (
+                        android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                                or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        )
+            }
+
             AndroidGraphicFactory.createInstance(application)
 
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS)
@@ -47,15 +68,15 @@
 
             launchTermux()
 
-            // Delay bringing your app back to front after 5 seconds (adjust as needed)
             Handler(Looper.getMainLooper()).postDelayed({
                 bringAppToFront()
-            }, 5000L) // 5 seconds delay
+            }, 5000L)
 
             setContent {
                 DateTimePickerWithMap()
             }
         }
+
 
         private fun launchTermux() {
             val launchIntent = packageManager.getLaunchIntentForPackage("com.termux")
@@ -186,7 +207,7 @@
                     onClick = { showFilterDialog = true },
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(start = 0.dp, bottom = 80.dp)
+                        .padding(start = 0.dp, bottom = 50.dp)
                 ) {
                     Icon(Icons.Filled.FilterList, contentDescription = "Open Filters")
                 }
@@ -198,7 +219,7 @@
                     },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 0.dp, bottom = 80.dp)
+                        .padding(end = 0.dp, bottom = 50.dp)
                 ) {
                     Icon(Icons.Filled.Navigation, contentDescription = "Update Routes")
                 }
