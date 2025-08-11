@@ -84,7 +84,7 @@ fun MapsforgeMap(
     endHour: Int = 0,
     endMinute: Int = 0,
 
-    drawRouteTrigger: Boolean = false,
+    drawRouteTrigger: Boolean = false, // You can keep this if you still want manual route trigger for SMS-only
 ) {
     val TAG = "MapsforgeMap"
     val context = LocalContext.current
@@ -113,7 +113,7 @@ fun MapsforgeMap(
 
     // On Compose startup: check permission and request if needed
     LaunchedEffect(Unit) {
-        if (androidx.core.content.ContextCompat.checkSelfPermission(
+        if (ContextCompat.checkSelfPermission(
                 context, Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED) {
             startLocationUpdates(locationManager) { loc ->
@@ -143,6 +143,20 @@ fun MapsforgeMap(
     val smsCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
     var showMarkerSelectDialog by remember { mutableStateOf(false) }
     val selectedCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
+
+    // Track if "My Location" is selected
+    var myLocationSelected by remember { mutableStateOf(false) }
+
+    // Special SmsCoordinate for My Location (dateMillis = -1 identifies it)
+    val myLocationCoordinate = currentLocation?.let { loc -> SmsCoordinate(loc, -1L) }
+
+    // When GPS updates, update "My Location" in selectedCoordinates if selected
+    LaunchedEffect(currentLocation) {
+        if (myLocationSelected && currentLocation != null) {
+            selectedCoordinates.removeAll { it.dateMillis == -1L }
+            selectedCoordinates.add(myLocationCoordinate!!)
+        }
+    }
 
     // Load SMS coordinates with date filter
     LaunchedEffect(startDateEpochMillis, endDateEpochMillis) {
@@ -196,8 +210,11 @@ fun MapsforgeMap(
                 if (mapCenter == null) mapCenter = coords.first().latLong
                 smsCoordinates.clear()
                 smsCoordinates.addAll(coords)
+                // Initially select all SMS coords (doesn't include My Location)
                 selectedCoordinates.clear()
                 selectedCoordinates.addAll(coords)
+                // Reset myLocationSelected to false here, so user chooses explicitly
+                myLocationSelected = false
             } else {
                 Log.w(TAG, "No valid coordinates found in SMS within date filter.")
             }
@@ -268,16 +285,16 @@ fun MapsforgeMap(
         }
     }
 
-    // Update SMS markers on map
+    // Update SMS markers on map (excluding "My Location" since it's drawn separately)
     LaunchedEffect(smsCoordinates) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
         markerManager.clearAllMarkers(mapView)
-        smsCoordinates.forEachIndexed { _, coord ->
+        smsCoordinates.forEach { coord ->
             markerManager.addMarkerWithDate(mapView, coord.latLong, coord.dateMillis)
         }
     }
 
-    // Draw route polyline
+    // Draw route polyline when triggered or when selected coordinates change
     LaunchedEffect(drawRouteTrigger, selectedCoordinates.toList()) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
         polylineRef.value?.let {
@@ -295,7 +312,7 @@ fun MapsforgeMap(
                     val linePaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
                         color = android.graphics.Color.BLUE
                         strokeWidth = 6f
-                        setStyle(org.mapsforge.core.graphics.Style.STROKE)
+                        setStyle(Style.STROKE)
                     }
 
                     val routePolyline = Polyline(linePaint, AndroidGraphicFactory.INSTANCE)
@@ -323,7 +340,7 @@ fun MapsforgeMap(
         }
     }
 
-    // Draw red triangle polygon for current GPS location
+    // Draw red triangle polygon for current GPS location on map
     LaunchedEffect(currentLocation) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
         currentLocationPolygonRef.value?.let {
@@ -350,14 +367,41 @@ fun MapsforgeMap(
         }
     }
 
-    // Show marker selection dialog
+    // Marker selection dialog includes "My Location" option at top
     if (showMarkerSelectDialog) {
         AlertDialog(
             onDismissRequest = { showMarkerSelectDialog = false },
             title = { Text("Select Markers to Route") },
             text = {
-                // Replace this inside your AlertDialog text LazyColumn
                 LazyColumn {
+                    // My Location checkbox first
+                    myLocationCoordinate?.let { myLoc ->
+                        val isSelected = selectedCoordinates.contains(myLoc)
+                        item {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { checked ->
+                                        myLocationSelected = checked
+                                        if (checked) {
+                                            selectedCoordinates.add(myLoc)
+                                        } else {
+                                            selectedCoordinates.removeAll { it.dateMillis == -1L }
+                                        }
+                                    }
+                                )
+                                Text(
+                                    text = "My Location",
+                                    modifier = Modifier.padding(start = 8.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Then SMS coordinates list
                     items(smsCoordinates) { coord ->
                         val isSelected = selectedCoordinates.contains(coord)
                         Row(
@@ -378,7 +422,6 @@ fun MapsforgeMap(
                         }
                     }
                 }
-
             },
             confirmButton = {
                 Button(onClick = { showMarkerSelectDialog = false }) {
