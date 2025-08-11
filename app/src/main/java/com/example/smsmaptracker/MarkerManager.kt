@@ -19,6 +19,7 @@ import java.util.Locale
 class MarkerManager(private val context: Context) {
     private val TAG = "MarkerManager"
     private var currentMarker: Marker? = null
+    private val markers = mutableListOf<Marker>() // store all markers
 
     fun addStaticMarker(mapView: MapView, position: LatLong) {
         try {
@@ -34,16 +35,12 @@ class MarkerManager(private val context: Context) {
             val marker = Marker(position, mapsforgeBitmap, (size * 0.5f).toInt(), (size * -0.4f).toInt())
 
             mapView.layerManager.layers.add(marker)
+            markers.add(marker) // store it
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add static marker", e)
         }
     }
 
-    /**
-     * Add a marker with a date label above it.
-     * @param position LatLong position of marker
-     * @param dateMillis timestamp to display above the marker
-     */
     fun addMarkerWithDate(mapView: MapView, position: LatLong, dateMillis: Long) {
         try {
             val input = context.assets.open("symbols/marker.png")
@@ -69,12 +66,11 @@ class MarkerManager(private val context: Context) {
             val bgRectWidth = textWidth + padding * 2
             val bgRectHeight = textHeight + padding
 
-            val totalHeight = size + bgRectHeight.toInt() + 8  // spacing between text and icon
+            val totalHeight = size + bgRectHeight.toInt() + 8
             val bitmapWidth = size.coerceAtLeast(bgRectWidth.toInt())
             val combinedBitmap = Bitmap.createBitmap(bitmapWidth, totalHeight, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(combinedBitmap)
 
-            // Draw red background behind the date
             val bgRect = RectF(
                 (bitmapWidth - bgRectWidth) / 2f,
                 0f,
@@ -87,36 +83,29 @@ class MarkerManager(private val context: Context) {
             }
             canvas.drawRoundRect(bgRect, 6f, 6f, bgPaint)
 
-            // Draw white text centered in the red box
             val textBaseline = bgRectHeight / 2f - (paint.descent() + paint.ascent()) / 2f
             canvas.drawText(dateText, bitmapWidth / 2f, textBaseline, paint)
 
-            // Draw the marker image below the text box
             val markerIconY = bgRectHeight + 8f
             canvas.drawBitmap(scaledBitmap, (bitmapWidth - size) / 2f, markerIconY, null)
 
             val drawable = BitmapDrawable(context.resources, combinedBitmap)
             val mapsforgeBitmap = AndroidGraphicFactory.convertToBitmap(drawable)
 
-            // 📌 Proportional offset like your zoom marker
             val horizontalOffset = (bitmapWidth / 2f) - (size * 1f)
             val verticalOffset = totalHeight - (size * 2.0f)
 
             val marker = Marker(position, mapsforgeBitmap, horizontalOffset.toInt(), verticalOffset.toInt())
             mapView.layerManager.layers.add(marker)
+            markers.add(marker) // store it
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add marker with date label", e)
         }
     }
 
-    fun updateMarkerForZoom(
-        mapView: MapView,
-        zoom: Byte,
-        center: LatLong
-    ) {
+    fun updateMarkerForZoom(mapView: MapView, zoom: Byte, center: LatLong) {
         mapView.post {
-            // Remove old marker
             currentMarker?.let { mapView.layerManager.layers.remove(it) }
             currentMarker = null
 
@@ -151,5 +140,23 @@ class MarkerManager(private val context: Context) {
                 Log.e(TAG, "Failed to create marker for zoom")
             }
         }
+    }
+
+    // 🗑 Remove a specific marker
+    fun removeMarker(mapView: MapView, marker: Marker) {
+        mapView.layerManager.layers.remove(marker)
+        markers.remove(marker)
+    }
+
+    // 🗑 Remove all markers added by this manager
+    fun clearAllMarkers(mapView: MapView) {
+        for (marker in markers) {
+            mapView.layerManager.layers.remove(marker)
+        }
+        markers.clear()
+
+        // Also remove zoom marker
+        currentMarker?.let { mapView.layerManager.layers.remove(it) }
+        currentMarker = null
     }
 }

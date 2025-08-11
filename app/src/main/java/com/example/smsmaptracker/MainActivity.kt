@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import org.mapsforge.map.android.graphics.AndroidGraphicFactory
 import androidx.core.view.WindowCompat
 import java.util.Calendar
+import androidx.compose.material.icons.filled.Navigation
 
 class MainActivity : ComponentActivity() {
 
@@ -47,7 +48,6 @@ class MainActivity : ComponentActivity() {
             DateTimePickerWithMap()
         }
     }
-
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun DateTimePickerWithMap() {
@@ -64,8 +64,10 @@ class MainActivity : ComponentActivity() {
         var endMinute by remember { mutableStateOf(30) }
 
         val context = LocalContext.current
-        val scope = rememberCoroutineScope()
         var showFilterDialog by remember { mutableStateOf(false) }
+
+        // New state to trigger route drawing
+        var drawRouteTrigger by remember { mutableStateOf(false) }
 
         fun showDatePicker(
             initialYear: Int,
@@ -103,9 +105,8 @@ class MainActivity : ComponentActivity() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                // No top padding, keep left, right and bottom padding
                 .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
-        ){
+        ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -137,7 +138,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     key(
                         startYear, startMonth, startDay, startHour, startMinute,
-                        endYear, endMonth, endDay, endHour, endMinute
+                        endYear, endMonth, endDay, endHour, endMinute,
                     ) {
                         MapsforgeMap(
                             startYear = startYear,
@@ -149,20 +150,33 @@ class MainActivity : ComponentActivity() {
                             endMonth = endMonth,
                             endDay = endDay,
                             endHour = endHour,
-                            endMinute = endMinute
+                            endMinute = endMinute,
+                            drawRouteTrigger = drawRouteTrigger
                         )
                     }
-
                 }
             }
 
+            // Existing filter button
             FloatingActionButton(
                 onClick = { showFilterDialog = true },
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 0.dp, bottom = 80.dp)  // increase bottom padding here
+                    .padding(start = 0.dp, bottom = 80.dp)
             ) {
                 Icon(Icons.Filled.FilterList, contentDescription = "Open Filters")
+            }
+
+            // New FloatingActionButton for route drawing (same style)
+            FloatingActionButton(
+                onClick = {
+                    drawRouteTrigger = !drawRouteTrigger  // toggle to trigger recomposition and route redraw
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 0.dp, bottom = 80.dp)
+            ) {
+                Icon(Icons.Filled.Navigation, contentDescription = "Update Routes")
             }
 
             if (showFilterDialog) {
@@ -172,7 +186,6 @@ class MainActivity : ComponentActivity() {
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
-                            // ➕ Button to auto-select today's full range
                             Button(onClick = {
                                 val now = java.util.Calendar.getInstance()
                                 startYear = now.get(Calendar.YEAR)

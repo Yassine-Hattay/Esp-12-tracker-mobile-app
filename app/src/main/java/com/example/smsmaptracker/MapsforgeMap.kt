@@ -2,33 +2,32 @@ package com.example.smsmaptracker
 
 import android.provider.Telephony
 import android.util.Log
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
-import org.mapsforge.core.graphics.Color
-import org.mapsforge.core.graphics.Paint
-import org.mapsforge.core.graphics.Style
 import org.mapsforge.core.model.LatLong
 import org.mapsforge.map.android.graphics.AndroidGraphicFactory
-import org.mapsforge.map.layer.overlay.Marker
-import org.mapsforge.map.layer.overlay.Polyline
 import org.mapsforge.map.android.view.MapView
+import org.mapsforge.map.layer.overlay.Polyline
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Locale
+import java.util.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Place
 
-// Helper function to calculate distance between two LatLong points (approx meters)
+
 fun distanceBetween(p1: LatLong, p2: LatLong): Double {
     val earthRadius = 6371000.0 // meters
     val dLat = Math.toRadians(p2.latitude - p1.latitude)
@@ -41,7 +40,7 @@ fun distanceBetween(p1: LatLong, p2: LatLong): Double {
     val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
     return earthRadius * c
 }
-// Helper function as before
+
 fun toEpochMillis(
     year: Int, month: Int, day: Int,
     hour: Int = 0, minute: Int = 0
@@ -73,6 +72,8 @@ fun MapsforgeMap(
     endDay: Int? = null,
     endHour: Int = 0,
     endMinute: Int = 0,
+
+    drawRouteTrigger: Boolean = false  // NEW parameter to trigger route drawing
 ) {
     val TAG = "MapsforgeMap"
     val context = LocalContext.current
@@ -85,12 +86,21 @@ fun MapsforgeMap(
         toEpochMillis(endYear, endMonth, endDay, endHour, endMinute)
     } else null
 
-    var mapCenter by remember { mutableStateOf(LatLong(36.7753026, 10.1120584)) }
+    var mapCenter by remember { mutableStateOf<LatLong?>(null) }
+
     val previousZoomLevel = remember { mutableStateOf<Byte?>(null) }
     val mapViewRef = remember { mutableStateOf<MapView?>(null) }
     val polylineRef = remember { mutableStateOf<Polyline?>(null) }
 
     val smsCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
+
+    val lastUserCenter = remember { mutableStateOf<LatLong?>(null) }
+    val lastUserZoom = remember { mutableStateOf<Byte?>(null) }
+
+    // Dialog visible state
+    var showMarkerSelectDialog by remember { mutableStateOf(false) }
+    // Selected markers for routing
+    val selectedCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
 
     LaunchedEffect(startDateEpochMillis, endDateEpochMillis) {
         try {
@@ -145,9 +155,15 @@ fun MapsforgeMap(
             }
 
             if (coordinates.isNotEmpty()) {
-                mapCenter = coordinates.first().latLong
+                if (mapCenter == null) {
+                    mapCenter = coordinates.first().latLong
+                }
                 smsCoordinates.clear()
                 smsCoordinates.addAll(coordinates)
+
+                // Initially select all coordinates
+                selectedCoordinates.clear()
+                selectedCoordinates.addAll(coordinates)
             } else {
                 Log.w(TAG, "No valid coordinates found in SMS messages within the date filter.")
             }
@@ -195,86 +211,132 @@ fun MapsforgeMap(
             previousZoomLevel = previousZoomLevel,
             markerManager = markerManager
         ).apply {
-            this.mapCenter = mapCenter
+            this.mapCenter = mapCenter ?: LatLong(36.7753026, 10.1120584)
         }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            mapViewProvider.createMapView(mapCenter) { mapView ->
-                mapViewRef.value = mapView
-            }
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+    Box(modifier = Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { ctx ->
+                mapViewProvider.createMapView(mapCenter ?: LatLong(36.7753026, 10.1120584)) { mapView ->
+                    mapViewRef.value = mapView
+                    mapView.setZoomLevel(8.toByte())
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
 
-    // When smsCoordinates change, add markers and fetch + display route
+        // FloatingActionButton at bottom center
+        FloatingActionButton(
+            onClick = { showMarkerSelectDialog = true },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 80.dp)
+        ) {
+            Icon(Icons.Filled.Place, contentDescription = "Select Markers")
+        }
+    }
+
+    // Update markers on map when smsCoordinates change
     LaunchedEffect(smsCoordinates) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
+        markerManager.clearAllMarkers(mapView)
+        smsCoordinates.forEachIndexed { index, smsCoord ->
+            Log.d(TAG, "Adding marker #$index at ${smsCoord.latLong} with date ${smsCoord.dateMillis}")
+            markerManager.addMarkerWithDate(mapView, smsCoord.latLong, smsCoord.dateMillis)
+        }
+    }
 
-        // Clear old polyline if exists
+    // Draw or update route only when drawRouteTrigger toggled or selectedCoordinates change
+    LaunchedEffect(drawRouteTrigger, selectedCoordinates.toList()) {
+        val mapView = mapViewRef.value ?: return@LaunchedEffect
         polylineRef.value?.let {
             mapView.layerManager.layers.remove(it)
             polylineRef.value = null
         }
 
-        // Add markers with date labels
-        smsCoordinates.forEachIndexed { index, smsCoord ->
-            Log.d(TAG, "Adding marker #$index at ${smsCoord.latLong} with date ${smsCoord.dateMillis}")
-            markerManager.addMarkerWithDate(mapView, smsCoord.latLong, smsCoord.dateMillis)
-        }
-
-        // Update zoom marker on first coordinate or fallback
-        val center = smsCoordinates.firstOrNull()?.latLong ?: mapCenter
-        markerManager.updateMarkerForZoom(mapView, 16, center)
-
-        mapView.repaint()
-
-        if (smsCoordinates.size >= 2) {
+        if (drawRouteTrigger && selectedCoordinates.size >= 2) {
             try {
-                val routePoints = withContext(Dispatchers.IO) {
-                    fetchGraphhopperRoute(smsCoordinates.map { it.latLong })
+                val routePoints = withContext<List<LatLong>>(Dispatchers.IO) {
+                    fetchGraphhopperRoute(selectedCoordinates.map { it.latLong })
                 }
 
                 if (routePoints.isNotEmpty()) {
-
-                    val mapView = mapViewRef.value ?: return@LaunchedEffect
-
-                    // Remove old polyline if exists
-                    polylineRef.value?.let {
-                        mapView.layerManager.layers.remove(it)
-                        polylineRef.value = null
-                    }
-
-                    // Create paint for the full route polyline
                     val linePaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
                         color = android.graphics.Color.BLUE
                         strokeWidth = 6f
                         setStyle(org.mapsforge.core.graphics.Style.STROKE)
                     }
 
-                    // Create a polyline and add all route points in order
                     val routePolyline = Polyline(linePaint, AndroidGraphicFactory.INSTANCE)
-                    routePoints.forEach { latLong ->
-                        routePolyline.addPoint(latLong)
-                    }
+                    routePoints.forEach { latLong -> routePolyline.addPoint(latLong) }
 
-                    // Add the polyline to the map
                     mapView.layerManager.layers.add(routePolyline)
                     polylineRef.value = routePolyline
 
-                    mapView.post {
-                        mapView.repaint()
+                    lastUserCenter.value?.let { center ->
+                        lastUserZoom.value?.let { zoom ->
+                            try {
+                                mapView.setCenter(center)
+                                mapView.setZoomLevel(zoom.toByte())
+                            } catch (t: Throwable) {
+                                Log.w(TAG, "Could not restore center/zoom after route: ${t.message}")
+                            }
+                        }
                     }
 
+                    mapView.post { mapView.repaint() }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching or displaying route", e)
             }
         }
+    }
 
+    // Marker selection dialog
+    if (showMarkerSelectDialog) {
+        AlertDialog(
+            onDismissRequest = { showMarkerSelectDialog = false },
+            title = { Text("Select Markers to Route") },
+            text = {
+                if (smsCoordinates.isEmpty()) {
+                    Text("No markers available in the selected date range.")
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                        items(smsCoordinates) { coord ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                            ) {
+                                val checked = selectedCoordinates.contains(coord)
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        if (it) selectedCoordinates.add(coord)
+                                        else selectedCoordinates.remove(coord)
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "Lat: ${coord.latLong.latitude.format(4)}, Lon: ${coord.latLong.longitude.format(4)} - " +
+                                            "Date: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(coord.dateMillis))}"
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showMarkerSelectDialog = false }) {
+                    Text("Done")
+                }
+            }
+        )
     }
 }
+
+// Helper extension function to format doubles nicely
+fun Double.format(digits: Int) = "%.${digits}f".format(this)
 
 fun fetchGraphhopperRoute(points: List<LatLong>): List<LatLong> {
     val client = OkHttpClient()

@@ -74,6 +74,8 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.squareup.okhttp3:okhttp:4.11.0")
 
+    implementation("androidx.compose.material:material-icons-extended:1.4.3")  // or your Compose material version
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
