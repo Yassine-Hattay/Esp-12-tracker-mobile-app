@@ -21,26 +21,6 @@ class MarkerManager(private val context: Context) {
     private var currentMarker: Marker? = null
     private val markers = mutableListOf<Marker>() // store all markers
 
-    fun addStaticMarker(mapView: MapView, position: LatLong) {
-        try {
-            val input = context.assets.open("symbols/marker.png")
-            val originalBitmap = BitmapFactory.decodeStream(input)
-            input.close()
-
-            val size = 64
-            val scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, size, size, true)
-            val drawable = BitmapDrawable(context.resources, scaledBitmap)
-            val mapsforgeBitmap = AndroidGraphicFactory.convertToBitmap(drawable)
-
-            val marker = Marker(position, mapsforgeBitmap, (size * 0.5f).toInt(), (size * -0.4f).toInt())
-
-            mapView.layerManager.layers.add(marker)
-            markers.add(marker) // store it
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to add static marker", e)
-        }
-    }
-
     fun addMarkerWithDate(mapView: MapView, position: LatLong, dateMillis: Long) {
         try {
             val input = context.assets.open("symbols/marker.png")
@@ -104,50 +84,6 @@ class MarkerManager(private val context: Context) {
         }
     }
 
-    fun updateMarkerForZoom(mapView: MapView, zoom: Byte, center: LatLong) {
-        mapView.post {
-            currentMarker?.let { mapView.layerManager.layers.remove(it) }
-            currentMarker = null
-
-            try {
-                val input = context.assets.open("symbols/marker.png")
-                val originalBitmap = BitmapFactory.decodeStream(input)
-                input.close()
-
-                if (originalBitmap != null) {
-                    val baseSize = 24
-                    val maxSize = 150
-                    val zoomLevel = zoom.toInt().coerceIn(0, 20)
-                    val size = (baseSize + ((maxSize - baseSize) * zoomLevel / 20f)).toInt()
-
-                    val scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, size, size, true)
-                    val drawable = BitmapDrawable(context.resources, scaledBitmap)
-                    val mapsforgeBitmap = AndroidGraphicFactory.convertToBitmap(drawable)
-
-                    val horizontalOffset = (size / 2f) - (size * 0.44f)
-                    val verticalOffset = size - (size * 1.0f)
-
-                    val newMarker = Marker(center, mapsforgeBitmap, horizontalOffset.toInt(), verticalOffset.toInt())
-
-                    mapView.layerManager.layers.add(newMarker)
-                    currentMarker = newMarker
-
-                    Log.d(TAG, "Marker updated for zoom $zoom with size $size")
-                } else {
-                    Log.e(TAG, "Failed to decode bitmap for marker")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to create marker for zoom")
-            }
-        }
-    }
-
-    // 🗑 Remove a specific marker
-    fun removeMarker(mapView: MapView, marker: Marker) {
-        mapView.layerManager.layers.remove(marker)
-        markers.remove(marker)
-    }
-
     // 🗑 Remove all markers added by this manager
     fun clearAllMarkers(mapView: MapView) {
         for (marker in markers) {
@@ -159,4 +95,22 @@ class MarkerManager(private val context: Context) {
         currentMarker?.let { mapView.layerManager.layers.remove(it) }
         currentMarker = null
     }
+
+    fun addMarker(mapView: MapView, position: LatLong) {
+        // Your existing logic to create a simple marker (or adapt from addStaticMarker)
+        val input = context.assets.open("symbols/marker.png")
+        val originalBitmap = BitmapFactory.decodeStream(input)
+        input.close()
+
+        val size = 64
+        val scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, size, size, true)
+        val drawable = BitmapDrawable(context.resources, scaledBitmap)
+        val mapsforgeBitmap = AndroidGraphicFactory.convertToBitmap(drawable)
+
+        val marker = Marker(position, mapsforgeBitmap, (size * 0.5f).toInt(), (size * -0.4f).toInt())
+
+        mapView.layerManager.layers.add(marker)
+        markers.add(marker) // or a separate list if you want to distinguish placed markers
+    }
+
 }

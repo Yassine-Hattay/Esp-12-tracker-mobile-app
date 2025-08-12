@@ -12,6 +12,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,7 +31,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import org.mapsforge.map.android.graphics.AndroidGraphicFactory
-import org.mapsforge.core.graphics.Paint
 import org.mapsforge.core.graphics.Style
 import org.mapsforge.core.model.LatLong
 import org.mapsforge.map.android.view.MapView
@@ -41,13 +41,16 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Flag
+import kotlin.math.cos
 
-// Data classes and utility functions...
-
+// Utility extension for formatting doubles
 fun Double.format(digits: Int) = "%.${digits}f".format(this)
 
+// Data class for SMS coordinate
 data class SmsCoordinate(val latLong: LatLong, val dateMillis: Long)
 
+// Converts date to epoch millis
 fun toEpochMillis(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 0): Long {
     val cal = Calendar.getInstance().apply {
         set(Calendar.YEAR, year)
@@ -61,16 +64,17 @@ fun toEpochMillis(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 
     return cal.timeInMillis
 }
 
+// Creates a triangle polygon around a center LatLong
 fun createTriangleAround(center: LatLong, sizeMeters: Double = 20.0): List<LatLong> {
     val latOffset = sizeMeters / 111000.0
-    val lonOffset = sizeMeters / (111000.0 * Math.cos(Math.toRadians(center.latitude)))
+    val lonOffset = sizeMeters / (111000.0 * cos(Math.toRadians(center.latitude)))
 
     val p1 = LatLong(center.latitude + latOffset, center.longitude)
     val p2 = LatLong(center.latitude - latOffset / 2, center.longitude - lonOffset)
     val p3 = LatLong(center.latitude - latOffset / 2, center.longitude + lonOffset)
-    return listOf(p1, p2, p3, p1) // close polygon
+    return listOf(p1, p2, p3, p1) // closed polygon
 }
-@SuppressLint("MissingPermission") // permission checked manually
+@SuppressLint("MissingPermission")
 @Composable
 fun MapsforgeMap(
     startYear: Int? = null,
@@ -85,20 +89,16 @@ fun MapsforgeMap(
     endHour: Int = 0,
     endMinute: Int = 0,
 
-    drawRouteTrigger: Boolean = false, // You can keep this if you still want manual route trigger for SMS-only
+    drawRouteTrigger: Boolean = false,
 ) {
     val TAG = "MapsforgeMap"
     val context = LocalContext.current
 
-    // Current Location state
     var currentLocation by remember { mutableStateOf<LatLong?>(null) }
-
-    // Location manager
     val locationManager = remember {
         context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     }
 
-    // Permission launcher for Location
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { granted ->
@@ -112,11 +112,11 @@ fun MapsforgeMap(
         }
     )
 
-    // On Compose startup: check permission and request if needed
     LaunchedEffect(Unit) {
         if (ContextCompat.checkSelfPermission(
                 context, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED) {
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
             startLocationUpdates(locationManager) { loc ->
                 currentLocation = LatLong(loc.latitude, loc.longitude)
             }
@@ -145,13 +145,9 @@ fun MapsforgeMap(
     var showMarkerSelectDialog by remember { mutableStateOf(false) }
     val selectedCoordinates = remember { mutableStateListOf<SmsCoordinate>() }
 
-    // Track if "My Location" is selected
     var myLocationSelected by remember { mutableStateOf(false) }
-
-    // Special SmsCoordinate for My Location (dateMillis = -1 identifies it)
     val myLocationCoordinate = currentLocation?.let { loc -> SmsCoordinate(loc, -1L) }
 
-    // When GPS updates, update "My Location" in selectedCoordinates if selected
     LaunchedEffect(currentLocation) {
         if (myLocationSelected && currentLocation != null) {
             selectedCoordinates.removeAll { it.dateMillis == -1L }
@@ -159,13 +155,15 @@ fun MapsforgeMap(
         }
     }
 
-    // Load SMS coordinates with date filter
     LaunchedEffect(startDateEpochMillis, endDateEpochMillis) {
         try {
-            Log.d(TAG, "Querying SMS inbox with date filter [$startDateEpochMillis .. $endDateEpochMillis]")
+            Log.d(
+                TAG,
+                "Querying SMS inbox with date filter [$startDateEpochMillis .. $endDateEpochMillis]"
+            )
 
             val selectionBuilder = StringBuilder("address LIKE ?")
-            val selectionArgs = mutableListOf("%+21655895524%") // Your filter phone number here
+            val selectionArgs = mutableListOf("%+21655895524%")
 
             if (startDateEpochMillis != null && endDateEpochMillis != null) {
                 selectionBuilder.append(" AND date BETWEEN ? AND ?")
@@ -211,10 +209,8 @@ fun MapsforgeMap(
                 if (mapCenter == null) mapCenter = coords.first().latLong
                 smsCoordinates.clear()
                 smsCoordinates.addAll(coords)
-                // Initially select all SMS coords (doesn't include My Location)
                 selectedCoordinates.clear()
                 selectedCoordinates.addAll(coords)
-                // Reset myLocationSelected to false here, so user chooses explicitly
                 myLocationSelected = false
             } else {
                 Log.w(TAG, "No valid coordinates found in SMS within date filter.")
@@ -224,7 +220,6 @@ fun MapsforgeMap(
         }
     }
 
-    // Load map and theme files from cache or assets
     val mapFile = remember {
         val file = File(context.cacheDir, "Tunisia_oam.osm.map")
         if (!file.exists()) {
@@ -265,10 +260,22 @@ fun MapsforgeMap(
         }
     }
 
+    val placedMarkers = remember { mutableStateListOf<SmsCoordinate>() }
+    var showAimer by remember { mutableStateOf(false) }
+
+    // New state to track "keep trying zoom"
+    var zoomingToLocation by remember { mutableStateOf(false) }
+    var lastToastTime by remember { mutableLongStateOf(0L) }
+
     Box(Modifier.fillMaxSize()) {
         AndroidView(
-            factory = { ctx ->
-                mapViewProvider.createMapView(mapCenter ?: LatLong(36.7753026, 10.1120584)) { mapView ->
+            factory = { _ ->
+                mapViewProvider.createMapView(
+                    mapCenter ?: LatLong(
+                        36.7753026,
+                        10.1120584
+                    )
+                ) { mapView ->
                     mapViewRef.value = mapView
                     mapView.setZoomLevel(8.toByte())
                 }
@@ -276,7 +283,33 @@ fun MapsforgeMap(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Marker selection FAB
+        if (showAimer) {
+            Box(
+                Modifier.fillMaxSize()
+            ) {
+                Canvas(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .align(Alignment.Center)
+                ) {
+                    val strokeWidth = 4f
+                    drawLine(
+                        color = androidx.compose.ui.graphics.Color.Red,
+                        strokeWidth = strokeWidth,
+                        start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                        end = androidx.compose.ui.geometry.Offset(size.width, size.height)
+                    )
+                    drawLine(
+                        color = androidx.compose.ui.graphics.Color.Red,
+                        strokeWidth = strokeWidth,
+                        start = androidx.compose.ui.geometry.Offset(size.width, 0f),
+                        end = androidx.compose.ui.geometry.Offset(0f, size.height)
+                    )
+                }
+            }
+        }
+
+        // FAB: Marker selection dialog
         FloatingActionButton(
             onClick = { showMarkerSelectDialog = true },
             modifier = Modifier
@@ -286,35 +319,74 @@ fun MapsforgeMap(
             Icon(Icons.Filled.Place, contentDescription = "Select Markers")
         }
 
-        var lastToastTime by remember { mutableStateOf(0L) }
-
+        // FAB: Zoom to My Location with retry until location available
         FloatingActionButton(
             onClick = {
-                val mapView = mapViewRef.value
-                val loc = currentLocation
-                if (mapView != null && loc != null) {
-                    mapView.setCenter(loc)
-                    mapView.setZoomLevel(18.toByte()) // zoom in close to location
-                    mapView.post { mapView.repaint() }
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+                    == PackageManager.PERMISSION_GRANTED) {
+                    zoomingToLocation = true
                 } else {
-                    val now = System.currentTimeMillis()
-                    if (now - lastToastTime > 2000) { // 2-second cooldown
-                        Toast.makeText(context, "No GPS location yet", Toast.LENGTH_SHORT).show()
-                        lastToastTime = now
-                    }
+                    locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                 }
             },
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(y = (-80).dp) // move upward
+                .offset(y = (-80).dp)
                 .padding(end = 0.dp)
         ) {
             Icon(Icons.Filled.MyLocation, contentDescription = "Zoom to My Location")
         }
+
+        // FAB: Toggle Aimer / Place Marker
+        FloatingActionButton(
+            onClick = {
+                val mapView = mapViewRef.value ?: return@FloatingActionButton
+                if (showAimer) {
+                    val center = mapView.model.mapViewPosition.center
+                    val newMarker = SmsCoordinate(center, -2L)
+                    placedMarkers.add(newMarker)
+                    markerManager.addMarker(mapView, center)
+                    Toast.makeText(
+                        context,
+                        "Marker placed at: ${center.latitude.format(6)}, ${center.longitude.format(6)}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    showAimer = false
+                } else {
+                    showAimer = true
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = 16.dp)
+                .offset(y = (-20).dp)
+                .padding(top = 16.dp, end = 16.dp)
+        ) {
+            Icon(Icons.Filled.Flag, contentDescription = "Place Flag Marker")
+        }
     }
 
+    // Keep trying to zoom to location until available
+    LaunchedEffect(zoomingToLocation, currentLocation) {
+        if (zoomingToLocation) {
+            val loc = currentLocation
+            val mapView = mapViewRef.value
+            if (loc != null && mapView != null) {
+                mapView.setCenter(loc)
+                mapView.setZoomLevel(18.toByte())
+                mapView.post { mapView.repaint() }
+                zoomingToLocation = false
+            } else {
+                val now = System.currentTimeMillis()
+                if (now - lastToastTime > 2000) {
+                    Toast.makeText(context, "Waiting for GPS location...", Toast.LENGTH_SHORT).show()
+                    lastToastTime = now
+                }
+            }
+        }
+    }
 
-    // Update SMS markers on map (excluding "My Location" since it's drawn separately)
+    // Update SMS markers on map
     LaunchedEffect(smsCoordinates) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
         markerManager.clearAllMarkers(mapView)
@@ -323,30 +395,34 @@ fun MapsforgeMap(
         }
     }
 
-    // Draw route polyline when triggered or when selected coordinates change
+    // Update placed markers on map when list changes
+    LaunchedEffect(placedMarkers.toList()) {
+        val mapView = mapViewRef.value ?: return@LaunchedEffect
+        placedMarkers.forEach { coord ->
+            markerManager.addMarker(mapView, coord.latLong)
+        }
+    }
+
+    // Draw route polyline when triggered or selected coords change
     LaunchedEffect(drawRouteTrigger, selectedCoordinates.toList()) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
         polylineRef.value?.let {
             mapView.layerManager.layers.remove(it)
             polylineRef.value = null
         }
-
         if (drawRouteTrigger && selectedCoordinates.size >= 2) {
             try {
-                val routePoints = withContext<List<LatLong>>(Dispatchers.IO) {
+                val routePoints = withContext(Dispatchers.IO) {
                     fetchGraphhopperRoute(selectedCoordinates.map { it.latLong })
                 }
-
                 if (routePoints.isNotEmpty()) {
                     val linePaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
                         color = android.graphics.Color.BLUE
                         strokeWidth = 6f
                         setStyle(Style.STROKE)
                     }
-
                     val routePolyline = Polyline(linePaint, AndroidGraphicFactory.INSTANCE)
                     routePoints.forEach { latLong -> routePolyline.addPoint(latLong) }
-
                     mapView.layerManager.layers.add(routePolyline)
                     polylineRef.value = routePolyline
 
@@ -354,13 +430,15 @@ fun MapsforgeMap(
                         lastUserZoom.value?.let { zoom ->
                             try {
                                 mapView.setCenter(center)
-                                mapView.setZoomLevel(zoom.toByte())
+                                mapView.setZoomLevel(zoom)
                             } catch (t: Throwable) {
-                                Log.w(TAG, "Could not restore center/zoom after route: ${t.message}")
+                                Log.w(
+                                    TAG,
+                                    "Could not restore center/zoom after route: ${t.message}"
+                                )
                             }
                         }
                     }
-
                     mapView.post { mapView.repaint() }
                 }
             } catch (e: Exception) {
@@ -369,14 +447,13 @@ fun MapsforgeMap(
         }
     }
 
-    // Draw red triangle polygon for current GPS location on map
+    // Draw current GPS location as red triangle
     LaunchedEffect(currentLocation) {
         val mapView = mapViewRef.value ?: return@LaunchedEffect
         currentLocationPolygonRef.value?.let {
             mapView.layerManager.layers.remove(it)
             currentLocationPolygonRef.value = null
         }
-
         currentLocation?.let { loc ->
             val fillPaint = AndroidGraphicFactory.INSTANCE.createPaint().apply {
                 color = android.graphics.Color.RED
@@ -385,25 +462,22 @@ fun MapsforgeMap(
                 color = android.graphics.Color.RED
                 strokeWidth = 4f
             }
-
             val trianglePoints = createTriangleAround(loc, sizeMeters = 2.0)
             val polygon = Polygon(fillPaint, strokePaint, AndroidGraphicFactory.INSTANCE)
             trianglePoints.forEach { polygon.addPoint(it) }
-
             mapView.layerManager.layers.add(polygon)
             currentLocationPolygonRef.value = polygon
             mapView.post { mapView.repaint() }
         }
     }
 
-    // Marker selection dialog includes "My Location" option at top
+    // Marker select dialog
     if (showMarkerSelectDialog) {
         AlertDialog(
             onDismissRequest = { showMarkerSelectDialog = false },
             title = { Text("Select Markers to Route") },
             text = {
                 LazyColumn {
-                    // My Location checkbox first
                     myLocationCoordinate?.let { myLoc ->
                         val isSelected = selectedCoordinates.contains(myLoc)
                         item {
@@ -429,8 +503,6 @@ fun MapsforgeMap(
                             }
                         }
                     }
-
-                    // Then SMS coordinates list
                     items(smsCoordinates) { coord ->
                         val isSelected = selectedCoordinates.contains(coord)
                         Row(
@@ -445,7 +517,29 @@ fun MapsforgeMap(
                                 }
                             )
                             Text(
-                                text = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(coord.dateMillis)),
+                                text = SimpleDateFormat(
+                                    "yyyy-MM-dd HH:mm",
+                                    Locale.getDefault()
+                                ).format(Date(coord.dateMillis)),
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                    items(placedMarkers) { coord ->
+                        val isSelected = selectedCoordinates.contains(coord)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Checkbox(
+                                checked = isSelected,
+                                onCheckedChange = { checked ->
+                                    if (checked) selectedCoordinates.add(coord)
+                                    else selectedCoordinates.remove(coord)
+                                }
+                            )
+                            Text(
+                                text = "Placed Marker at ${coord.latLong.latitude.format(6)}, ${coord.latLong.longitude.format(6)}",
                                 modifier = Modifier.padding(start = 8.dp)
                             )
                         }
@@ -461,7 +555,8 @@ fun MapsforgeMap(
     }
 }
 
-// Helper function to start GPS location updates with callback
+
+// Starts location updates with callback
 @SuppressLint("MissingPermission")
 fun startLocationUpdates(locationManager: LocationManager, onLocationChanged: (Location) -> Unit) {
     val listener = object : LocationListener {
@@ -481,6 +576,7 @@ fun startLocationUpdates(locationManager: LocationManager, onLocationChanged: (L
     )
 }
 
+// Fetches a route from Graphhopper API given a list of points
 fun fetchGraphhopperRoute(points: List<LatLong>): List<LatLong> {
     val client = OkHttpClient()
     if (points.size < 2) return emptyList()
@@ -510,12 +606,11 @@ fun fetchGraphhopperRoute(points: List<LatLong>): List<LatLong> {
             val lat = coord.getDouble(1)
             routePoints.add(LatLong(lat, lon))
         }
-
         Log.d("MapsforgeMap", "Routing succeeded with ${routePoints.size} points.")
-
         routePoints
     } catch (e: Exception) {
         Log.e("MapsforgeMap", "Failed to fetch route", e)
         emptyList()
     }
 }
+

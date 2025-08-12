@@ -30,7 +30,7 @@
     class MainActivity : ComponentActivity() {
 
         private val requestSmsPermissionLauncher =
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
                 // Handle permission result if needed
             }
 
@@ -70,7 +70,7 @@
 
             Handler(Looper.getMainLooper()).postDelayed({
                 bringAppToFront()
-            }, 5000L)
+            }, 1000L)
 
             setContent {
                 DateTimePickerWithMap()
@@ -93,20 +93,19 @@
             startActivity(intent)
         }
 
-        @OptIn(ExperimentalMaterial3Api::class)
         @Composable
         fun DateTimePickerWithMap() {
-            var startYear by remember { mutableStateOf(2025) }
-            var startMonth by remember { mutableStateOf(8) }
-            var startDay by remember { mutableStateOf(4) }
-            var startHour by remember { mutableStateOf(13) }
-            var startMinute by remember { mutableStateOf(0) }
+            var startYear by remember { mutableIntStateOf(2025) }
+            var startMonth by remember { mutableIntStateOf(8) }
+            var startDay by remember { mutableIntStateOf(4) }
+            var startHour by remember { mutableIntStateOf(13) }
+            var startMinute by remember { mutableIntStateOf(0) }
     
-            var endYear by remember { mutableStateOf(2025) }
-            var endMonth by remember { mutableStateOf(8) }
-            var endDay by remember { mutableStateOf(4) }
-            var endHour by remember { mutableStateOf(15) }
-            var endMinute by remember { mutableStateOf(30) }
+            var endYear by remember { mutableIntStateOf(2025) }
+            var endMonth by remember { mutableIntStateOf(8) }
+            var endDay by remember { mutableIntStateOf(4) }
+            var endHour by remember { mutableIntStateOf(15) }
+            var endMinute by remember { mutableIntStateOf(30) }
     
             val context = LocalContext.current
             var showFilterDialog by remember { mutableStateOf(false) }
@@ -232,7 +231,7 @@
                             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
     
                                 Button(onClick = {
-                                    val now = java.util.Calendar.getInstance()
+                                    val now = Calendar.getInstance()
                                     startYear = now.get(Calendar.YEAR)
                                     startMonth = now.get(Calendar.MONTH) + 1
                                     startDay = now.get(Calendar.DAY_OF_MONTH)

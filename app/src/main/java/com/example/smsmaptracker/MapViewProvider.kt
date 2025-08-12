@@ -67,19 +67,17 @@ class MapViewProvider(
                 menuCallback ?: XmlRenderThemeMenuCallback { emptySet() }
 
             override fun getResourceProvider(): XmlThemeResourceProvider =
-                resourceProvider ?: object : XmlThemeResourceProvider {
-                    override fun createInputStream(relativePath: String?, source: String?): InputStream? {
-                        return try {
-                            if (relativePath != null) {
-                                val path = if (relativePath.startsWith("/")) relativePath.substring(1) else relativePath
-                                context.assets.open(path)
-                            } else {
-                                null
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
+                resourceProvider ?: XmlThemeResourceProvider { relativePath, _ ->
+                    try {
+                        if (relativePath != null) {
+                            val path = if (relativePath.startsWith("/")) relativePath.substring(1) else relativePath
+                            context.assets.open(path)
+                        } else {
                             null
                         }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        null
                     }
                 }
 
