@@ -314,6 +314,7 @@ fun MapsforgeMap(
             onClick = { showMarkerSelectDialog = true },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .offset(x = -45.dp)
                 .padding(bottom = 50.dp)
         ) {
             Icon(Icons.Filled.Place, contentDescription = "Select Markers")
@@ -357,10 +358,9 @@ fun MapsforgeMap(
                 }
             },
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = 16.dp)
-                .offset(y = (-20).dp)
-                .padding(top = 16.dp, end = 16.dp)
+                .align(Alignment.BottomCenter)
+                .offset(x = 45.dp)
+                .padding(bottom = 50.dp)
         ) {
             Icon(Icons.Filled.Flag, contentDescription = "Place Flag Marker")
         }
